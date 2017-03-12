@@ -1,0 +1,22 @@
+<head>
+	<meta charset="UTF-8">
+	<title>Edit</title>
+	<script src="/dogi.js"></script>
+	<script src="/booru.js"></script>
+	<script src="/booruedit.js"></script>
+	<link rel="stylesheet" type="text/css" href="/dogibooru.css">
+</head>
+<body>
+	<div id="view_container">
+		<div id="tedit_container">
+			<span class="tedit_head">Image Tags:</span>
+			<textarea class="tedit_earea" id="tedit_iarea"></textarea>
+			<div id="tedit_sub_container"></div>
+			<div id="tedit_button_div">
+				<button class="tedit_button" onclick="addsub()">ADD SUB</button>
+				<button class="tedit_button" id="tedit_submit" onclick="editsubmit()">SUBMIT</button>
+			</div>
+		</div>
+		<div id="image_view"></div>
+	</div>
+</body>
