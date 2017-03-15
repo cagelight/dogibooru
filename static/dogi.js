@@ -83,4 +83,11 @@ class DOGI {
     this.err.contentDocument.body.style.color = "#000"
   }
 
+  static ReadableFilesize(num_bytes) {
+    if (num_bytes < 2048) return num_bytes + " B"
+    if (num_bytes < 2097152) return Math.round(num_bytes / 1024) + " KiB"
+    if (num_bytes < 2147483648) return Math.round(num_bytes / 2097152) + " MiB"
+    return num_bytes + Math.round(num_bytes / 2147483648) + " GiB"
+  }
+
 }

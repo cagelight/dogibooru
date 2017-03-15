@@ -78,7 +78,7 @@ static bool create_thumbnail(postgres_conview & pq, QImage const & src, unsigned
 	return pq.cmd(strf("INSERT INTO booru.thumb (img_id, sqsize, ext) VALUES (%i, %u, '%s');", img_id, sqsize, "jpg").c_str());
 }
 
-#ifdef BLUETEST_DEBUG
+#ifdef DOGIBOORU_DEBUG
 #define isemsg(fmt, ...) { std::string err = blueshift::strf("ISE (%s, line %u): %s", __PRETTY_FUNCTION__, __LINE__, blueshift::strf(fmt, ##__VA_ARGS__).c_str()).c_str(); blueshift::print(err); return generic_error(http::status_code::internal_server_error, err); }
 #else
 #define isemsg(fmt, ...) { return generic_error(http::status_code::internal_server_error); }
@@ -254,37 +254,26 @@ struct dogibooru_api_filter : public basic_route {
 		if (!post.is_map()) return generic_error(http::status_code::bad_request);
 		
 		json & tags = post["tags"];
-		if (!tags.is_ary()) return generic_error(http::status_code::bad_request);
+		json & omit = post["omit"];
+		if (!tags && !omit) return generic_error(http::status_code::bad_request);
+		if (tags && !tags.is_ary()) return generic_error(http::status_code::bad_request);
+		if (omit && !omit.is_ary()) return generic_error(http::status_code::bad_request);
 		
-		if (!tags->ary.size()) {
-			json ret = json::ary();
-			postgres_result res;
-			pqtup(res, "SELECT id FROM booru.img ORDER BY id DESC");
-			for (int i = 0; i < res.num_rows(); i++) {
-				ret[i] = res.get_value(i, 0);
-			}
-			return response_query->set_body(ret.serialize(), "application/json");
+		std::string filt_in_clause {};
+		std::string omit_in_clause {};
+		
+		if (tags) for (size_t i = 0; i < tags->ary.size(); i++) {
+			if (i != 0) filt_in_clause += ",";
+			filt_in_clause += tags[i].to_string();
 		}
 		
-		std::string in_clause {};
-		for (size_t i = 0; i < tags->ary.size(); i++) {
-			if (i != 0) in_clause += ",";
-			in_clause += strf("'%s'", tags[i].to_string().c_str());
+		if (omit) for (size_t i = 0; i < omit->ary.size(); i++) {
+			if (i != 0) omit_in_clause += ",";
+			omit_in_clause += omit[i].to_string();
 		}
 		
 		postgres_result res;
-		pqtup(res, R"(
-			WITH tagmatches AS (
-				SELECT id FROM booru.tag WHERE name IN (%s)
-			), itagmatches AS (
-				SELECT img_id FROM booru.img_tag WHERE tag_id IN (SELECT * FROM tagmatches)
-			), stagmatches AS (
-				SELECT img_id FROM booru.sub WHERE id IN (
-					SELECT sub_id FROM booru.sub_tag WHERE tag_id IN (SELECT * FROM tagmatches)
-				)
-			)
-			SELECT * FROM itagmatches UNION SELECT * FROM stagmatches ORDER BY img_id DESC
-		)", in_clause.c_str(), in_clause.c_str());
+		pqtup(res, "SELECT img_id FROM booru.filter_imgs_by_tags_txt('%s','%s')", filt_in_clause.c_str(), omit_in_clause.c_str());
 		
 		json ret = json::ary();
 		for (int i = 0; i < res.num_rows(); i++) {
@@ -301,6 +290,166 @@ struct dogibooru_api_filter : public basic_route {
 struct dogibooru_api_tgroups : public basic_route {
 	void respond() {
 		
+		json post;
+		try {
+			post = json::parse({body.begin(), body.end()});
+		} catch (blueshift::general_exception const & ex) {
+			return generic_error(http::status_code::bad_request, ex.what());
+		}
+		if (!post.is_map()) return generic_error(http::status_code::bad_request);
+		
+		postgres_conview pq = pqp->acquire();
+		
+		json & get = post["get"];
+		json & set = post["set"];
+		json & del = post["del"];
+		
+		if (!set && !get && !del) return generic_error(http::status_code::bad_request);
+		if ((set || del) && !get_cookie_act(pq, request->cookie("act"))) return generic_error(http::status_code::forbidden, "editing requires admin authentication"); 
+		if (get && !get.is_map()) return generic_error(http::status_code::bad_request);
+		if (set && !set.is_map()) return generic_error(http::status_code::bad_request);
+		if (del && !del.is_map()) return generic_error(http::status_code::bad_request);
+		
+		postgres_result res;
+		
+		if (del) {
+			json & del_grps = del["groups"];
+			json & del_tags = del["tags"];
+			if (!del_grps && !del_tags) return generic_error(http::status_code::bad_request);
+			if (del_grps && !del_grps.is_ary()) return generic_error(http::status_code::bad_request);
+			if (del_tags && !del_tags.is_ary()) return generic_error(http::status_code::bad_request);
+			if (del_tags) {
+				std::string in_clause {};
+				for (size_t i = 0; i < del_tags->ary.size(); i++) {
+					if (i != 0) in_clause += ",";
+					in_clause += "'" + del_tags->ary[i].to_string() + "'";
+				}
+				pqcmd("DELETE FROM booru.tag WHERE name IN (%s)", in_clause.c_str());
+			}
+			if (del_grps) {
+				std::string in_clause {};
+				for (size_t i = 0; i < del_grps->ary.size(); i++) {
+					if (i != 0) in_clause += ",";
+					in_clause += "'" + del_grps->ary[i].to_string() + "'";
+				}
+				pqcmd("DELETE FROM booru.grp WHERE name IN (%s)", in_clause.c_str());
+			}
+		}
+		
+		if (set) {
+			for (auto const & pair : set->map) {
+				if (!pair.second.is_ary()) return generic_error(http::status_code::bad_request);
+				std::string grp = pair.first;
+				pqtup(res, "SELECT * FROM booru.add_group_ret_id('%s')", grp.c_str());
+				std::string grp_id = res.get_value(0, 0);
+				for (std::string tag : pair.second->ary) {
+					pqtup(res, "SELECT * FROM booru.add_tag_ret_id('%s')", tag.c_str());
+					std::string tag_id = res.get_value(0, 0);
+					pqcmd("UPDATE booru.tag SET grp_id = %s WHERE id = %s", grp_id.c_str(), tag_id.c_str());
+				}
+			}
+		}
+		
+		json ret = json::map();
+		
+		if (get) {
+			if (get["all"].to_int() == 1) {
+				pqtup(res, "SELECT name FROM booru.tag WHERE grp_id IS NULL ORDER BY name ASC");
+				if (res.num_rows()) {
+					json & nulls = ret["groupless"] = json::ary();
+					for (int i = 0; i < res.num_rows(); i++) {
+						nulls->ary.push_back(res.get_value(i, 0));
+					}
+				}
+				pqtup(res, "SELECT booru.grp.name, booru.tag.name FROM booru.tag INNER JOIN booru.grp ON booru.grp.id = booru.tag.grp_id ORDER BY booru.grp.name ASC, booru.tag.name ASC");
+				if (res.num_rows()) {
+					json & groups = ret["groups"] = json::map();
+					for (int i = 0; i < res.num_rows(); i++) {
+						std::string grp = res.get_value(i, 0);
+						std::string tag = res.get_value(i, 1);
+						if (!groups[grp].is_ary()) groups[grp] = json::ary();
+						groups[grp]->ary.push_back(tag);
+					}
+				}
+			} else {
+				json & get_grps = get["groups"];
+				json & get_tags = get["tags"];
+				if ((get_grps && get_tags) || (!get_grps && !get_tags)) return generic_error(http::status_code::bad_request);
+				if (get_grps && !get_grps.is_ary()) return generic_error(http::status_code::bad_request);
+				if (get_tags && !get_tags.is_ary()) return generic_error(http::status_code::bad_request);
+				if (get_tags) {
+					
+				} else {
+					
+				}
+			}
+		}
+		
+		return response_query->set_body(ret.serialize(), "application/json");
+	}
+};
+
+// ================================================================================================================================
+// --------------------------------------------------------------------------------------------------------------------------------
+// ================================================================================================================================
+
+struct dogibooru_api_tagsrel : public basic_route {
+	void respond() {
+		
+		json post;
+		try {
+			post = json::parse({body.begin(), body.end()});
+		} catch (blueshift::general_exception const & ex) {
+			return generic_error(http::status_code::bad_request, ex.what());
+		}
+		if (!post.is_map()) return generic_error(http::status_code::bad_request);
+		
+		postgres_conview pq = pqp->acquire();
+		postgres_result res;
+		
+		json ret = json::ary();
+		
+		json & tags = post["tags"];
+		json & omit = post["omit"];
+		
+		std::string filt_in_clause {};
+		std::string omit_in_clause {};
+		
+		if (tags) for (size_t i = 0; i < tags->ary.size(); i++) {
+			if (i != 0) filt_in_clause += ",";
+			filt_in_clause += tags[i].to_string();
+		}
+		
+		if (omit) for (size_t i = 0; i < omit->ary.size(); i++) {
+			if (i != 0) omit_in_clause += ",";
+			omit_in_clause += omit[i].to_string();
+		}
+		
+		pqtup(res, "WITH tagsrel AS (SELECT * FROM booru.gets_tagsrel_from_tags('%s','%s')) SELECT booru.tag.name, tagsrel.count FROM booru.tag INNER JOIN tagsrel ON tagsrel.tag_id = booru.tag.id ORDER BY tagsrel.count DESC, booru.tag.name ASC", filt_in_clause.c_str(), omit_in_clause.c_str());
+		
+		for (int i = 0; i < res.num_rows(); i++) {
+			json e = json::map();
+			e["name"] = res.get_value(i, 0);
+			e["count"] = json::nui(res.get_value(i, 1));
+			ret->ary.push_back(e);
+		}
+		return response_query->set_body(ret.serialize(), "application/json");
+		
+		/*
+		if (tags || omit) {
+			
+		} else {
+			pqtup(res, "WITH tagtotal AS (SELECT tag_id FROM booru.sub_tag UNION ALL SELECT tag_id FROM booru.img_tag) SELECT booru.tag.name, COUNT(tag_id) AS tag_count FROM tagtotal INNER JOIN booru.tag ON booru.tag.id = tag_id GROUP BY booru.tag.name ORDER BY tag_count DESC");
+			for (int i = 0; i < res.num_rows(); i++) {
+				json e = json::map();
+				e["name"] = res.get_value(i, 0);
+				e["count"] = json::nui(res.get_value(i, 1));
+				ret->ary.push_back(e);
+			}
+		}
+		
+		return response_query->set_body(ret.serialize(), "application/json");
+		*/
 	}
 };
 
@@ -391,6 +540,8 @@ static void dogibooru_pulse() {
 	last_pulse = this_pulse;
 	postgres_conview pq = pqp->acquire();
 	pq.cmd("DELETE FROM booru.cookie WHERE expires < NOW()");
+	pq.cmd("DELETE FROM booru.tag WHERE id NOT IN (SELECT tag_id FROM booru.img_tag) AND id NOT IN (SELECT tag_id FROM booru.sub_tag)");
+	pq.cmd("DELETE FROM booru.grp WHERE id NOT IN (SELECT grp_id FROM booru.tag WHERE grp_id IS NOT NULL)");
 }
 
 BLUESHIFT_MODULE_INIT_FUNC {
@@ -540,6 +691,24 @@ BLUESHIFT_MODULE_INIT_FUNC {
 	)");
 	
 	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.add_group_ret_id(group_name VARCHAR(32)) RETURNS BIGINT AS $$
+		DECLARE
+			group_id BIGINT;
+		BEGIN
+			INSERT INTO booru.grp (name) VALUES (group_name) 
+				ON CONFLICT DO NOTHING 
+				RETURNING id INTO group_id;
+			IF NOT FOUND THEN 
+				SELECT id INTO group_id 
+				FROM booru.grp
+				WHERE name = group_name;
+			END IF;
+			RETURN group_id;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
+	pqinitcmd(pq, R"(
 		CREATE OR REPLACE FUNCTION booru.add_tag_to_img(img_id BIGINT, tag_name VARCHAR(32)) RETURNS void AS $$
 		DECLARE
 			tag_id BIGINT := booru.add_tag_ret_id(tag_name);
@@ -587,7 +756,89 @@ BLUESHIFT_MODULE_INIT_FUNC {
 		$$ LANGUAGE plpgsql;
 	)");
 	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.filter_imgs_by_tags(filter_ary VARCHAR(32)[], omit_ary VARCHAR(32)[]) RETURNS TABLE (img_id BIGINT, sub_id BIGINT) AS $$
+		BEGIN
+			RETURN QUERY
+			WITH filterids AS (
+				SELECT DISTINCT id 
+				FROM booru.tag
+				WHERE name = ANY(filter_ary)
+			), omitids AS (
+				SELECT id 
+				FROM booru.tag
+				WHERE name = ANY(omit_ary)
+			), tagtotal AS (
+				SELECT booru.sub.img_id, booru.sub_tag.sub_id, booru.sub_tag.tag_id
+				FROM booru.sub_tag
+				INNER JOIN booru.sub ON booru.sub.id = booru.sub_tag.sub_id
+				UNION
+				SELECT booru.sub.img_id, booru.sub.id AS sub_id, booru.img_tag.tag_id
+				FROM booru.sub
+				INNER JOIN booru.img_tag ON booru.img_tag.img_id = booru.sub.img_id
+			), filtermatches AS (
+				SELECT DISTINCT tagtotal.img_id, tagtotal.sub_id
+				FROM tagtotal 
+				WHERE NOT EXISTS(SELECT * FROM filterids) OR (tagtotal.tag_id IN (SELECT * FROM filterids))
+				GROUP BY tagtotal.img_id, tagtotal.sub_id 
+				HAVING NOT EXISTS(SELECT * FROM filterids) OR (COUNT(tagtotal.tag_id) = (SELECT COUNT(*) FROM filterids))
+			), omitmatches AS (
+				SELECT DISTINCT tagtotal.img_id, tagtotal.sub_id
+				FROM tagtotal
+				WHERE tagtotal.tag_id IN (SELECT * FROM omitids)
+				GROUP BY tagtotal.img_id, tagtotal.sub_id
+			)
+			SELECT DISTINCT filtermatches.img_id, filtermatches.sub_id
+			FROM filtermatches 
+			WHERE (filtermatches.img_id, filtermatches.sub_id) NOT IN (
+				SELECT omitmatches.img_id, omitmatches.sub_id 
+				FROM omitmatches
+			)
+			ORDER BY filtermatches.img_id DESC;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
 	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.filter_imgs_by_tags_txt(filter TEXT, omit TEXT) RETURNS TABLE (img_id BIGINT, sub_id BIGINT) AS $$
+		DECLARE 
+			filter_ary VARCHAR(32)[] = string_to_array(filter,',');
+			omit_ary VARCHAR(32)[] = string_to_array(omit,',');
+		BEGIN
+			RETURN QUERY SELECT * FROM booru.filter_imgs_by_tags(filter_ary, omit_ary);
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.gets_tagsrel_from_tags(filter TEXT, omit TEXT) RETURNS TABLE (tag_id BIGINT, count BIGINT) AS $$
+		DECLARE 
+			filter_ary VARCHAR(32)[] = string_to_array(filter,',');
+			omit_ary VARCHAR(32)[] = string_to_array(omit,',');
+		BEGIN
+			RETURN QUERY
+			WITH filterids AS (
+				SELECT DISTINCT id 
+				FROM booru.tag
+				WHERE name = ANY(filter_ary)
+			), omitids AS (
+				SELECT id 
+				FROM booru.tag
+				WHERE name = ANY(omit_ary)
+			), relstuff AS (
+				SELECT * FROM booru.filter_imgs_by_tags(filter_ary, omit_ary)
+			), tcounts AS (
+				SELECT booru.img_tag.tag_id AS tag_id FROM booru.img_tag WHERE booru.img_tag.img_id IN (SELECT relstuff.img_id FROM relstuff)
+				UNION ALL
+				SELECT booru.sub_tag.tag_id AS tag_id FROM booru.sub_tag WHERE booru.sub_tag.sub_id IN (SELECT relstuff.sub_id FROM relstuff)
+			)
+			SELECT tcounts.tag_id, COUNT(tcounts.tag_id)
+			FROM tcounts
+			WHERE tcounts.tag_id NOT IN (SELECT * FROM filterids) AND tcounts.tag_id NOT IN (SELECT * FROM omitids)
+			GROUP BY tcounts.tag_id;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
 	
 	// ================================================================
 	
@@ -596,13 +847,14 @@ BLUESHIFT_MODULE_INIT_FUNC {
 	std::filesystem::create_directory( std::filesystem::path {thumbs_root} );
 	
 	auto api = rt->route_route("api");
-	api->route_root<dogibooru_api_image>("img", {"POST"});
-	api->route_root<dogibooru_api_tags>("tags", {"POST"});
-	api->route_root<dogibooru_api_filter>("filter", {"POST"});
-	api->route_root<dogibooru_api_tgroups>("tgroups", {"POST"});
+	api->route_exact<dogibooru_api_image>("img", {"POST"});
+	api->route_exact<dogibooru_api_tags>("tags", {"POST"});
+	api->route_exact<dogibooru_api_filter>("filter", {"POST"});
+	api->route_exact<dogibooru_api_tgroups>("tgroups", {"POST"});
+	api->route_exact<dogibooru_api_tagsrel>("tagsrel", {"POST"});
 	
-	rt->route_root<dogibooru_admin_login>("dologin", {"POST"});
-	rt->route_root<dogibooru_image_upload>("doupload", {"POST"});
+	rt->route_exact<dogibooru_admin_login>("dologin", {"POST"});
+	rt->route_exact<dogibooru_image_upload>("doupload", {"POST"});
 	
 	rt->route_serve("/", static_root);
 	rt->route_serve("/i/", images_root);
@@ -614,7 +866,6 @@ BLUESHIFT_MODULE_INIT_FUNC {
 BLUESHIFT_MODULE_TERM_FUNC {
 	if (rt) delete rt;
 	delete pqp;
-	//dogibooru_db.save();
 }
 
 // ================================================================================================================================

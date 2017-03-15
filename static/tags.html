@@ -7,8 +7,15 @@
 	<link rel="stylesheet" type="text/css" href="/dogibooru.css">
 </head>
 <body>
-  <div id="tgroups_container">
-    <div id="tgroups_header"></div>
-    <div id="tgroups_view"></div>
+  <div id="tgrp_container">
+    <div id="tgrp_header">
+			<span>Tag:</span>
+			<input type="text" name="lname" id="tgrp_taginp">
+			<span>Group:</span>
+			<input type="text" name="lname" id="tgrp_grpinp">
+			<button id="tgrp_submit" onclick="tgrpsubmit()">SUBMIT</button>
+			<button id="tgrp_delete" onclick="tgrpdelete()">DELETE</button>
+		</div>
+    <div id="tgrp_view"></div>
   </div>
 </body>

@@ -137,9 +137,11 @@ function editsubmit() {
 			subs.push(sub)
 		}
 	})
-	if (subs.length) {
-		obj["set"][0].subs = subs
+	if (!subs.length) {
+		DOGI.ErrorPopup("All images must have at least one subject")
+		return
 	}
+	obj["set"][0].subs = subs
 	//================
 	DOGI.JSONPost("/api/tags/", obj, function(result, ok) {
 		if (ok && img in result) {
