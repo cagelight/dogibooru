@@ -1,0 +1,23 @@
+<head>
+	<meta charset="UTF-8">
+	<title>Tag Implications</title>
+	<script src="/dogi.js"></script>
+	<script src="/booru.js"></script>
+	<script src="/booruimpl.js"></script>
+	<link rel="stylesheet" type="text/css" href="/dogibooru.css">
+</head>
+<body>
+  <div id="impl_container">
+    <div id="impl_header">
+			<span>Tag:</span>
+			<input type="text" name="lname" id="impl_taginp">
+			<span>Implies:</span>
+			<input type="text" name="lname" id="impl_impinp">
+			<button id="impl_submit" onclick="implsubmit()">SUBMIT</button>
+			<button id="impl_delete" onclick="impldelete()">DELETE</button>
+		</div>
+    <div id="impl_view">
+      <ul id="impl_tagcont" class="impl_list"></ul>
+    </div>
+  </div>
+</body>

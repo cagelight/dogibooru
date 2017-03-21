@@ -85,9 +85,18 @@ class DOGI {
 
   static ReadableFilesize(num_bytes) {
     if (num_bytes < 2048) return num_bytes + " B"
-    if (num_bytes < 2097152) return Math.round(num_bytes / 1024) + " KiB"
-    if (num_bytes < 2147483648) return Math.round(num_bytes / 2097152) + " MiB"
-    return num_bytes + Math.round(num_bytes / 2147483648) + " GiB"
+    if (num_bytes < 2097152) return (num_bytes / 1024).toFixed(1) + " KiB"
+    if (num_bytes < 2147483648) return (num_bytes / 2097152).toFixed(1) + " MiB"
+    return num_bytes + (num_bytes / 2147483648).toFixed(1) + " GiB"
   }
 
+}
+
+String.prototype.hashCode = function(){
+  var hash = 5381;
+  for (i = 0; i < this.length; i++) {
+      char = this.charCodeAt(i);
+      hash = ((hash << 5) + hash) + char; /* hash * 33 + c */
+  }
+  return hash;
 }

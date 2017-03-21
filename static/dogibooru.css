@@ -46,16 +46,18 @@ a:hover {
 	display: flex;
 	flex-direction: column;
 	min-width: fit-content;
+	overflow: auto;
 }
 
 #index_leftbar > * {
-	margin: 2px 10px 2px 10px;
+	margin: 1px 10px 1px 10px;
 }
 
 .index_leftbar_tagcont {
 	display: flex;
 	flex-direction: row;
 	flex-wrap: nowrap;
+	min-height: fit-content;
 }
 
 .index_leftbar_tagname {
@@ -72,7 +74,7 @@ a:hover {
 .index_leftbar_options {
 	flex: 0 0 auto;
 	font-size: 12px;
-	margin-right: 5px;
+	margin-left: 5px;
 }
 
 #index_imgview {
@@ -84,6 +86,7 @@ a:hover {
 	flex-direction: row;
 	flex-wrap: wrap;
 	border-top-left-radius: 10px;
+	align-content: flex-start;
 }
 
 .index_entry {
@@ -137,12 +140,14 @@ a:hover {
 
 #tags_container {
 	flex: 0 0 auto;
-	padding-left: 10px;
-	background-color: #2C2C2C;
+	background-color: #222;
 	border-right: 4px solid #222;
 	overflow: auto;
 	min-width: 80px;
 	text-align: center;
+	display: flex;
+	flex-direction: column;
+	font-size: 0.75em;
 }
 
 #tags_head {
@@ -155,7 +160,7 @@ a:hover {
 	display: flex;
 	flex-direction: column;
 	flex: 0 0 auto;
-	background-color: #222;
+	background-color: #181818;
 	margin-top: 5px;
 	text-align: left;
 	padding: 10px;
@@ -163,6 +168,19 @@ a:hover {
 	padding-bottom: 10px;
 	border: 2px solid #181818;
 	border-right: none;
+	margin-bottom: 20px;
+	margin-left: 10px;
+}
+
+#view_edit_button {
+	flex: 0 0 auto;
+	background-color: #222;
+	border: none;
+	border-top: 5px solid #181818;
+	color: #CCC;
+	padding: 5px;
+	outline: none;
+	font-weight: bold;
 }
 
 .tags_text {
@@ -180,10 +198,11 @@ a:hover {
 
 .tags_separator {
 	flex: 0 0 auto;
-	height: 5px;
-	background-color: #181818;
+	height: 6px;
+	background-color: #000;
 	margin-top: 5px;
 	margin-bottom: 5px;
+	border-radius: 3px;
 }
 
 #tedit_container {
@@ -316,10 +335,9 @@ a:hover {
 	display: flex;
 	flex-direction: column;
 	padding: 10px;
-	padding-left: 20%;
-	padding-right: 20%;
+	padding-left: 5%;
+	padding-right: 5%;
 	align-items: center;
-	justify-content: center;
 	text-align:center;
 	overflow: auto;
 }
@@ -330,20 +348,17 @@ a:hover {
 
 .tgrp_grparea {
 	flex: 0 0 auto;
-	display: flex;
-	flex-direction: row;
-	flex-wrap: wrap;
 	margin-bottom: 20px;
+	justify-content: center;
 }
-
-.tgrp_grparea > * { margin: 5px; }
 
 .tgrp_grpheadtxt {
 	font-weight: bold;
 }
 
 .tgrp_grptagtxt {
-
+	margin-left: 6px;
+	margin-right: 6px
 }
 
 #tgrp_taginp {
@@ -378,6 +393,90 @@ a:hover {
 	outline: none;
 }
 
+/* IMPLICATIONS */
+
+#impl_container {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+}
+
+#impl_header {
+	flex: 0 0 auto;
+	height: 60px;
+	background-color: #181818;
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+}
+
+#impl_header > * { margin: 0 5px 0 5px; }
+
+#impl_view {
+	flex: 1 1 auto;
+	background-color: #111;
+	text-align: center;
+	overflow: auto;
+	padding: 20px;
+}
+
+#impl_tagcont {
+	display: inline-block;
+	text-align: left;
+	column-count: 6;
+	border: none;
+}
+
+.impl_list {
+	border-left: 5px solid;
+	border-color: inherit;
+	list-style-type: none;
+	padding-left: 5px;
+	margin: 5px 0px;
+}
+
+.impl_listitem {
+	margin: 1px 0px;
+	border-color: inherit;
+	break-inside: avoid-column;
+}
+
+#impl_taginp {
+	background-color: #333;
+	border: 5px solid #222;
+	color: #CCC;
+	padding: 5px;
+	outline: none;
+}
+
+#impl_impinp {
+	background-color: #333;
+	border: 5px solid #222;
+	color: #CCC;
+	padding: 5px;
+	outline: none;
+}
+
+#impl_submit {
+	background-color: #333;
+	border: 5px solid #222;
+	color: #CCC;
+	padding: 5px;
+	outline: none;
+}
+
+#impl_delete {
+	background-color: #333;
+	border: 5px solid #222;
+	color: #CCC;
+	padding: 5px;
+	outline: none;
+}
+
+/* DOGI */
+
 .dogi_error {
 	position: fixed;
 	top: 20px;
@@ -396,6 +495,8 @@ a:hover {
 	height: 20%;
 	margin: 4px;
 }
+
+/* ANIMATIONS */
 
 @keyframes tedit_submit_fail {
 	0% {
@@ -427,7 +528,32 @@ a:hover {
 	}
 }
 
+/* TAG GROUPS */
+
 .tgrp_grp_Homeless {
 	color: #777;
 	font-style: italic;
+}
+
+.tgrp_grp_artist {
+	color: #0F8;
+	font-style: italic;
+}
+
+.tgrp_grp_influence {
+	color: #08F;
+}
+
+.tgrp_grp_favorite {
+	color: #F80;
+	font-weight: bold;
+	text-shadow: 0px 0px 5px #F60;
+}
+
+.tgrp_grp_clothing {
+	color: #80F;
+}
+
+.tgrp_grp_genital {
+	color: #F08;
 }

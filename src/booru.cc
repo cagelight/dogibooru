@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <chrono>
+#include <map>
 
 #include <experimental/filesystem>
 namespace std { // TODO -- this is a temporary hack until std::filesystem is in GCC
@@ -181,8 +182,7 @@ struct dogibooru_api_tags : public basic_route {
 							if (!tag.size()) continue;
 							sql_sanitize(tag);
 							postgres_result res;
-							pqtup(res, "SELECT * FROM booru.add_tag_ret_id('%s')", tag.c_str());
-							pqcmd("INSERT INTO booru.sub_tag (sub_id, tag_id) VALUES (%s, '%s') ON CONFLICT DO NOTHING", sub_id.c_str(), res.get_value(0, 0).c_str());
+							pqtup(res, "SELECT booru.add_tag_to_sub(%s, '%s')", sub_id.c_str(), tag.c_str());
 						}
 					}
 				}
@@ -434,22 +434,108 @@ struct dogibooru_api_tagsrel : public basic_route {
 			ret->ary.push_back(e);
 		}
 		return response_query->set_body(ret.serialize(), "application/json");
+	}
+};
+
+// ================================================================================================================================
+// --------------------------------------------------------------------------------------------------------------------------------
+// ================================================================================================================================
+
+struct dogibooru_api_impls : public basic_route {
+	void respond() {
 		
-		/*
-		if (tags || omit) {
-			
-		} else {
-			pqtup(res, "WITH tagtotal AS (SELECT tag_id FROM booru.sub_tag UNION ALL SELECT tag_id FROM booru.img_tag) SELECT booru.tag.name, COUNT(tag_id) AS tag_count FROM tagtotal INNER JOIN booru.tag ON booru.tag.id = tag_id GROUP BY booru.tag.name ORDER BY tag_count DESC");
-			for (int i = 0; i < res.num_rows(); i++) {
-				json e = json::map();
-				e["name"] = res.get_value(i, 0);
-				e["count"] = json::nui(res.get_value(i, 1));
-				ret->ary.push_back(e);
+		json post;
+		try {
+			post = json::parse({body.begin(), body.end()});
+		} catch (blueshift::general_exception const & ex) {
+			return generic_error(http::status_code::bad_request, ex.what());
+		}
+		if (!post.is_map()) return generic_error(http::status_code::bad_request);
+		
+		postgres_conview pq = pqp->acquire();
+		postgres_result res;
+		
+		json & get = post["get"];
+		json & set = post["set"];
+		json & del = post["del"];
+		
+		if (!set && !get && !del) return generic_error(http::status_code::bad_request);
+		if ((set || del) && !get_cookie_act(pq, request->cookie("act"))) return generic_error(http::status_code::forbidden, "editing requires admin authentication"); 
+		if (get && !get.is_ary()) return generic_error(http::status_code::bad_request);
+		if (set && !set.is_ary()) return generic_error(http::status_code::bad_request);
+		if (del && !del.is_ary()) return generic_error(http::status_code::bad_request);
+		
+		if (del) {
+			pq.begin();
+			for (json & set_set : del->ary) {
+				std::string tag = set_set["tag"];
+				std::string imp = set_set["imp"];
+				if (!tag.size() || !imp.size()) return generic_error(http::status_code::bad_request);
+				pqcmd("WITH tagid AS ( SELECT booru.tag.id AS tag_id FROM booru.tag WHERE name = '%s' ), impid AS ( SELECT booru.tag.id AS implies_id FROM booru.tag WHERE name = '%s' ) DELETE FROM booru.impl WHERE tag_id IN (SELECT * FROM tagid) AND implies_id IN (SELECT * FROM impid)", tag.c_str(), imp.c_str());
 			}
+			pq.commit();
 		}
 		
-		return response_query->set_body(ret.serialize(), "application/json");
-		*/
+		if (set) {
+			pq.begin();
+			for (json & set_set : set->ary) {
+				std::string tag = set_set["tag"];
+				std::string imp = set_set["imp"];
+				if (!tag.size() || !imp.size()) return generic_error(http::status_code::bad_request);
+				pqcmd("WITH tagid AS ( SELECT booru.tag.id AS tag_id FROM booru.tag WHERE name = '%s' ), impid AS ( SELECT booru.tag.id AS implies_id FROM booru.tag WHERE name = '%s' ) INSERT INTO booru.impl SELECT tagid.tag_id, impid.implies_id FROM tagid, impid", tag.c_str(), imp.c_str());
+			}
+			pq.commit();
+		}
+		
+		if (get) {
+			
+			json ret = json::map();
+			
+			std::unordered_map<std::string, std::string> ids {};
+			std::unordered_map<std::string, json> treecur {};
+			
+			if (get->ary.size()) {
+				std::string in_clause;
+				for (size_t i = 0; i < get->ary.size(); i++) {
+					if (i != 0) in_clause += ",";
+					in_clause += strf("'%s'", get[i].to_string().c_str());
+				}
+				pqtup(res, "SELECT id, name FROM booru.tag WHERE name IN (%s) ORDER BY name ASC", in_clause.c_str());
+			} else {
+				pqtup(res, "SELECT id, name FROM booru.tag ORDER BY name ASC");
+			}
+			
+			for (int i = 0; i < res.num_rows(); i++) {
+				
+				std::string tagname = res.get_value(i, 1);
+				json & cur = ret[tagname] = json::map();
+				treecur[tagname] = cur;
+				ids[tagname] = res.get_value(i, 0);
+			}
+			
+			while (1) {
+				std::unordered_map<std::string, std::string> ids_old {ids};
+				std::unordered_map<std::string, json> treecur_old {treecur};
+				ids.clear();
+				treecur.clear();
+				for (auto const & kvp : treecur_old) {
+					std::string const & tag_id = ids_old[kvp.first];
+					pqtup(res, "SELECT tag_id, booru.tag.name FROM booru.impl INNER JOIN booru.tag ON booru.tag.id = tag_id WHERE implies_id = %s ORDER BY booru.tag.name ASC", tag_id.c_str());
+					if (!res.num_rows()) continue;
+					
+					for (int i = 0; i < res.num_rows(); i++) {
+						std::string tagname = res.get_value(i, 1);
+						ret->map.erase(tagname);
+						json & cur = treecur_old[kvp.first];
+						json & curm = cur[tagname] = json::map();
+						treecur[tagname] = curm;
+						ids[tagname] = res.get_value(i, 0);
+					}
+				}
+				if (!treecur.size()) break;
+			}
+			return response_query->set_body(ret.serialize(), "application/json");
+		}
 	}
 };
 
@@ -586,7 +672,8 @@ BLUESHIFT_MODULE_INIT_FUNC {
 		CREATE TABLE IF NOT EXISTS booru.tag (
 			id BIGSERIAL PRIMARY KEY,
 			name VARCHAR(32) NOT NULL UNIQUE,
-			grp_id BIGINT REFERENCES booru.grp ON DELETE SET NULL ON UPDATE CASCADE
+			grp_id BIGINT REFERENCES booru.grp ON DELETE SET NULL ON UPDATE CASCADE,
+			description TEXT
 		)
 	)");
 	// SUBJECTS
@@ -635,6 +722,13 @@ BLUESHIFT_MODULE_INIT_FUNC {
 			sqsize SMALLINT NOT NULL,
 			ext VARCHAR(4) NOT NULL,
 			PRIMARY KEY ( img_id, sqsize ) 
+		)
+	)");
+	pqinitcmd(pq, R"(
+		CREATE TABLE IF NOT EXISTS booru.impl (
+			tag_id BIGINT NOT NULL REFERENCES booru.tag ON DELETE CASCADE ON UPDATE CASCADE,
+			implies_id BIGINT NOT NULL REFERENCES booru.tag ON DELETE CASCADE ON UPDATE CASCADE,
+			PRIMARY KEY ( tag_id, implies_id ) 
 		)
 	)");
 	
@@ -713,7 +807,19 @@ BLUESHIFT_MODULE_INIT_FUNC {
 		DECLARE
 			tag_id BIGINT := booru.add_tag_ret_id(tag_name);
 		BEGIN
-			INSERT INTO booru.img_tag (img_id, tag_id) VALUES (img_id, tag_id) ON CONFLICT DO NOTHING;
+			WITH tag_ids AS ( SELECT * FROM booru.get_tag_implications(tag_id) )
+			INSERT INTO booru.img_tag (img_id, tag_id) SELECT img_id, tag_ids.tag_id FROM tag_ids ON CONFLICT DO NOTHING;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.add_tag_to_sub(sub_id BIGINT, tag_name VARCHAR(32)) RETURNS void AS $$
+		DECLARE
+			tag_id BIGINT := booru.add_tag_ret_id(tag_name);
+		BEGIN
+			WITH tag_ids AS ( SELECT * FROM booru.get_tag_implications(tag_id) )
+			INSERT INTO booru.sub_tag (sub_id, tag_id) SELECT sub_id, tag_ids.tag_id FROM tag_ids ON CONFLICT DO NOTHING;
 		END;
 		$$ LANGUAGE plpgsql;
 	)");
@@ -723,7 +829,7 @@ BLUESHIFT_MODULE_INIT_FUNC {
 		DECLARE 
 			id_ary BIGINT[] = string_to_array(id_ary_txt,',');
 		BEGIN
-			RETURN QUERY 
+			RETURN QUERY
 			SELECT booru.img_tag.img_id, booru.tag.name 
 			FROM booru.img_tag
 			INNER JOIN booru.tag
@@ -840,6 +946,59 @@ BLUESHIFT_MODULE_INIT_FUNC {
 		$$ LANGUAGE plpgsql;
 	)");
 	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.get_tag_implications(tag_id_root BIGINT) RETURNS TABLE (tag_id BIGINT) AS $$
+		BEGIN
+			RETURN QUERY
+			WITH RECURSIVE impl_res(tag_impl) AS (
+				SELECT booru.impl.tag_id
+				FROM booru.impl
+				WHERE booru.impl.tag_id = tag_id_root
+				UNION SELECT booru.impl.implies_id
+				FROM booru.impl, impl_res
+				WHERE booru.impl.tag_id = impl_res.tag_impl
+			)
+			SELECT tag_impl FROM impl_res;
+			IF NOT FOUND THEN
+				RETURN QUERY SELECT booru.tag.id FROM booru.tag WHERE booru.tag.id = tag_id_root;
+			END IF;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.reval_img(img_id_in BIGINT) RETURNS void AS $$
+		DECLARE
+			tag_id BIGINT;
+			sub_id BIGINT;
+		BEGIN
+			FOR tag_id IN SELECT booru.img_tag.tag_id FROM booru.img_tag WHERE booru.img_tag.img_id = img_id_in
+			LOOP
+				WITH impl_ids AS ( SELECT * FROM booru.get_tag_implications(tag_id) )
+				INSERT INTO booru.img_tag (img_id, tag_id) SELECT img_id_in, impl_ids.tag_id FROM impl_ids ON CONFLICT DO NOTHING;
+			END LOOP;
+			FOR sub_id, tag_id IN SELECT booru.sub_tag.sub_id, booru.sub_tag.tag_id FROM booru.sub_tag WHERE booru.sub_tag.sub_id IN (SELECT booru.sub.id FROM booru.sub WHERE booru.sub.img_id = img_id_in)
+			LOOP
+				WITH impl_ids AS ( SELECT * FROM booru.get_tag_implications(tag_id) )
+				INSERT INTO booru.sub_tag (sub_id, tag_id) SELECT sub_id, impl_ids.tag_id FROM impl_ids ON CONFLICT DO NOTHING;
+			END LOOP;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.reval_all() RETURNS void AS $$
+		DECLARE
+			img_id BIGINT;
+		BEGIN
+			FOR img_id IN SELECT booru.img.id FROM booru.img
+			LOOP
+				PERFORM booru.reval_img(img_id);
+			END LOOP;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
 	// ================================================================
 	
 	std::filesystem::create_directory( std::filesystem::path {static_root} );
@@ -852,6 +1011,7 @@ BLUESHIFT_MODULE_INIT_FUNC {
 	api->route_exact<dogibooru_api_filter>("filter", {"POST"});
 	api->route_exact<dogibooru_api_tgroups>("tgroups", {"POST"});
 	api->route_exact<dogibooru_api_tagsrel>("tagsrel", {"POST"});
+	api->route_exact<dogibooru_api_impls>("impls", {"POST"});
 	
 	rt->route_exact<dogibooru_admin_login>("dologin", {"POST"});
 	rt->route_exact<dogibooru_image_upload>("doupload", {"POST"});

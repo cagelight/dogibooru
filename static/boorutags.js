@@ -14,10 +14,12 @@ function create_tag_area(grpname, tagarry) {
   let grptagarea = document.createElement('div')
   grptagarea.className = 'tgrp_grparea'
   tagarry.forEach((tag)=>{
-    let tagtxt = document.createElement('span')
+    let tagtxt = document.createElement('a')
+    tagtxt.href = '/#' + tag
     tagtxt.className = "tgrp_grptagtxt " + "tgrp_grp_" + grpname
     tagtxt.appendChild(document.createTextNode(tag))
     grptagarea.appendChild(tagtxt)
+    grptagarea.appendChild(document.createTextNode(' '))
   })
   tag_area.appendChild(grptagarea)
 }
@@ -25,9 +27,17 @@ function create_tag_area(grpname, tagarry) {
 function setup_tag_area(data) {
   DOGI.ClearElement(tag_area)
   if (data.groups) {
+    let grpary = []
     for (let grp in data.groups) {
-      create_tag_area(grp, data.groups[grp])
+      grpd = {}
+      grpd.name = grp
+      grpd.data = data.groups[grp]
+      grpary.push(grpd)
     }
+    grpary.sort((a,b)=>{return a.name.localeCompare(b.name)})
+    grpary.forEach((grp)=>{
+      create_tag_area(grp.name, grp.data)
+    })
   }
   if (data.groupless) {
     create_tag_area("Homeless", data.groupless)

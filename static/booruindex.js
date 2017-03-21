@@ -95,6 +95,7 @@ function setup_page() {
   tagsrelobj.tags = pers.tags
   tagsrelobj.omit = pers.omit
   DOGI.JSONPost("/api/tagsrel", tagsrelobj, (data)=>{
+    let leftbar_tagmap = {}
     data.forEach((tag)=>{
       let tagstuff = document.createElement('div')
       tagstuff.className = 'index_leftbar_tagcont';
@@ -102,7 +103,8 @@ function setup_page() {
       let tagname = document.createElement('span')
       tagname.appendChild(document.createTextNode(tag.name))
       let tagnamelink = document.createElement('a')
-      tagnamelink.className = 'tgrp_grp_' + ' index_leftbar_tagname'
+      tagnamelink.className = 'index_leftbar_tagname'
+      leftbar_tagmap[tag.name] = tagnamelink
       //========
       taglpers = new persistent('')
       taglpers.clonefrom(pers)
@@ -112,6 +114,11 @@ function setup_page() {
       //========
       tagnamelink.appendChild(tagname)
       tagstuff.appendChild(tagnamelink)
+      //================
+      let tagcount = document.createElement('span')
+      tagcount.appendChild(document.createTextNode('(' + tag.count + ')'))
+      tagcount.className = 'index_leftbar_tagcount'
+      tagstuff.appendChild(tagcount)
       //================
       let tagcontrols = document.createElement('span')
       //========
@@ -135,14 +142,23 @@ function setup_page() {
       //========
       tagstuff.appendChild(tagcontrols)
       //================
-      let tagcount = document.createElement('span')
-      tagcount.appendChild(document.createTextNode('(' + tag.count + ')'))
-      tagcount.className = 'index_leftbar_tagcount'
-      tagstuff.appendChild(tagcount)
-      //================
       index_leftbar.appendChild(tagstuff)
     })
-  });
+    DOGI.JSONPost("/api/tgroups", {'get':{"all":1}}, (data)=>{
+      for (let grp in data.groups) {
+        data.groups[grp].forEach((tag)=>{
+          if (leftbar_tagmap[tag]) {
+            leftbar_tagmap[tag].className = 'tgrp_grp_' + grp + ' ' + leftbar_tagmap[tag].className
+          }
+        })
+      }
+      data.groupless.forEach((tag)=>{
+        if (leftbar_tagmap[tag]) {
+          leftbar_tagmap[tag].className = 'tgrp_grp_Homeless ' + leftbar_tagmap[tag].className
+        }
+      })
+    })
+  })
 }
 
 function update_page() {

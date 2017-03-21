@@ -1,9 +1,12 @@
 function setup_page() {
 	let img = window.location.hash.substring(1)
 	document.title = 'View: #' + img
+	let view_edit_button = document.getElementById('view_edit_button')
+	view_edit_button.onclick = ()=>{window.location.href = "/edit#" + img}
 	let tags_view = document.getElementById("tags_view")
 	DOGI.ClearElement(tags_view)
 	DOGI.JSONPost("/api/tags/", {"get":[parseInt(img)]}, function(result) {
+		let tagsv = {}
 		if (result[img].itags) result[img].itags.forEach(function(tag){
 			let link = document.createElement('a')
 			link.href = '/#' + tag
@@ -13,6 +16,7 @@ function setup_page() {
 			span.appendChild(document.createTextNode(tag.replace("_", " ")))
 			link.appendChild(span)
 			tags_view.appendChild(link)
+			tagsv[tag] = link
 		});
 		if (result[img].subs) result[img].subs.forEach((sub)=>{
 			let sep = document.createElement('div')
@@ -24,11 +28,26 @@ function setup_page() {
 				link.className = 'tags_link'
 				let span = document.createElement("span")
 				span.className = 'tags_text'
-				span.appendChild(document.createTextNode(tag.replace("_", " ")))
+				span.appendChild(document.createTextNode(tag.replace(/_/g, " ")))
 				link.appendChild(span)
 				tags_view.appendChild(link)
+				tagsv[tag] = link
 			})
 		})
+		DOGI.JSONPost("/api/tgroups", {'get':{"all":1}}, (data)=>{
+      for (let grp in data.groups) {
+        data.groups[grp].forEach((tag)=>{
+          if (tagsv[tag]) {
+            tagsv[tag].className = 'tgrp_grp_' + grp + ' ' + tagsv[tag].className
+          }
+        })
+      }
+      data.groupless.forEach((tag)=>{
+        if (tagsv[tag]) {
+          tagsv[tag].className = 'tgrp_grp_Homeless ' + tagsv[tag].className
+        }
+      })
+    })
 	});
 	DOGI.JSONPost("/api/img/", [parseInt(img)], function(result) {
 		let image_view = document.getElementById("image_view")
