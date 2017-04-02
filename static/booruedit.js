@@ -12,7 +12,8 @@ function setup_edit(get_obj) {
 	else tedit_iarea.value = ""
 	if (get_obj[img].subs) get_obj[img].subs.forEach((sub)=>{
 		let newsub = addsub()
-		newsub.textarea.value = sub.join(' ')
+		newsub.subid.innerHTML = "SUBJECT ID: #" + sub.id
+		newsub.textarea.value = sub.tags.join(' ')
 	})
 }
 
@@ -80,6 +81,11 @@ function addsub() {
 	new_subdivhead.className = 'tedit_sub_div_header'
 	new_subdiv.appendChild(new_subdivhead)
 	//================
+	let subidspan = document.createElement('span')
+	subidspan.className = 'tedit_sub_idspan'
+	subidspan.appendChild(document.createTextNode(''))
+	new_subdivhead.appendChild(subidspan)
+	//================
 	let subdelbutton = document.createElement('input')
 	subdelbutton.className = 'tedit_sub_del_button'
 	subdelbutton.type = 'button'
@@ -104,6 +110,7 @@ function addsub() {
 
 	let rdata = {}
 	rdata.textarea = new_sarea
+	rdata.subid = subidspan
 	return rdata
 }
 

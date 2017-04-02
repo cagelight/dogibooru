@@ -11,41 +11,51 @@ function setup_page() {
 			let link = document.createElement('a')
 			link.href = '/#' + tag
 			link.className = 'tags_link'
-			let span = document.createElement("span")
-			span.className = 'tags_text'
-			span.appendChild(document.createTextNode(tag.replace("_", " ")))
-			link.appendChild(span)
+			link.appendChild(document.createTextNode(tag.replace("_", " ")))
 			tags_view.appendChild(link)
-			tagsv[tag] = link
+			if (!tagsv[tag]) tagsv[tag] = []
+			tagsv[tag].push(link)
 		});
 		if (result[img].subs) result[img].subs.forEach((sub)=>{
 			let sep = document.createElement('div')
 			sep.className = 'tags_separator'
 			tags_view.appendChild(sep)
-			sub.forEach((tag)=>{
+			sub.tags.forEach((tag)=>{
 				let link = document.createElement('a')
 				link.href = '/#' + tag
 				link.className = 'tags_link'
-				let span = document.createElement("span")
-				span.className = 'tags_text'
-				span.appendChild(document.createTextNode(tag.replace(/_/g, " ")))
-				link.appendChild(span)
+				link.appendChild(document.createTextNode(tag.replace(/_/g, " ")))
 				tags_view.appendChild(link)
-				tagsv[tag] = link
+				if (!tagsv[tag]) tagsv[tag] = []
+				tagsv[tag].push(link)
 			})
+
+			let combined_tags = sub.tags
+			if (result[img].itags) combined_tags = combined_tags.concat(result[img].itags)
+
+			let lsim_but = document.createElement('a')
+			lsim_but.innerHTML = 'LSIM'
+			lsim_but.className = 'view_lsim_button'
+			lsim_but.href = "/#" + combined_tags.join(',') + '::lsim'
+			sep.appendChild(lsim_but)
+			let ssim_but = document.createElement('a')
+			ssim_but.innerHTML = 'SSIM'
+			ssim_but.className = 'view_ssim_button'
+			ssim_but.href = "/#" + combined_tags.join(',') + '::ssim'
+			sep.appendChild(ssim_but)
 		})
 		DOGI.JSONPost("/api/tgroups", {'get':{"all":1}}, (data)=>{
-      for (let grp in data.groups) {
+      if (data.groups) for (let grp in data.groups) {
         data.groups[grp].forEach((tag)=>{
-          if (tagsv[tag]) {
-            tagsv[tag].className = 'tgrp_grp_' + grp + ' ' + tagsv[tag].className
-          }
+          if (tagsv[tag]) tagsv[tag].forEach((tagi)=>{
+            tagi.className = 'tgrp_grp_' + grp + ' ' + tagi.className
+          })
         })
       }
-      data.groupless.forEach((tag)=>{
-        if (tagsv[tag]) {
-          tagsv[tag].className = 'tgrp_grp_Homeless ' + tagsv[tag].className
-        }
+      if (data.groupless) data.groupless.forEach((tag)=>{
+				if (tagsv[tag]) tagsv[tag].forEach((tagi)=>{
+					tagi.className = 'tgrp_grp_Homeless ' + tagi.className
+				})
       })
     })
 	});

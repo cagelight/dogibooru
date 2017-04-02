@@ -76,7 +76,7 @@ document.addEventListener("DOMContentLoaded", function(event) {
   impl_tagcont = document.getElementById('impl_tagcont')
   impl_taginp = document.getElementById('impl_taginp')
   impl_impinp = document.getElementById('impl_impinp')
-	setup_page()
+  setup_page()
 })
 
 function implsubmit() {

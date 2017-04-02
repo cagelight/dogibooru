@@ -72,13 +72,6 @@ static int get_cookie_act (postgres_conview & pq, std::string const & act_token)
 	return strtoul(lk.get_value(0, 0).c_str(), nullptr, 10);
 }
 
-static bool create_thumbnail(postgres_conview & pq, QImage const & src, unsigned int sqsize, int img_id) {
-	QImage rs = src.scaled(sqsize, sqsize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-	std::string newname = std::to_string(img_id) + "_" + std::to_string(sqsize) + ".jpg";
-	rs.save(QString::fromStdString(thumbs_root + newname), "JPEG", 90);
-	return pq.cmd(strf("INSERT INTO booru.thumb (img_id, sqsize, ext) VALUES (%i, %u, '%s');", img_id, sqsize, "jpg").c_str());
-}
-
 #ifdef DOGIBOORU_DEBUG
 #define isemsg(fmt, ...) { std::string err = blueshift::strf("ISE (%s, line %u): %s", __PRETTY_FUNCTION__, __LINE__, blueshift::strf(fmt, ##__VA_ARGS__).c_str()).c_str(); blueshift::print(err); return generic_error(http::status_code::internal_server_error, err); }
 #else
@@ -218,21 +211,82 @@ struct dogibooru_api_tags : public basic_route {
 				std::string sub_id = res.get_value(i, 1);
 				if (!i || img_id != last_img) { 
 					sub_i = 0;
-					ret[img_id]["subs"][sub_i] = json::ary();
+					json & sub_cur = ret[img_id]["subs"][sub_i] = json::map();
+					sub_cur["id"] = sub_id;
+					sub_cur["tags"] = json::ary();
 					last_img = img_id; 
 					last_sub = sub_id;
 				} else if (sub_id != last_sub) {
-					ret[img_id]["subs"][++sub_i] = json::ary();
+					json & sub_cur = ret[img_id]["subs"][++sub_i] = json::map();
+					sub_cur["id"] = sub_id;
+					sub_cur["tags"] = json::ary();
 					last_sub = sub_id;
 				}
 				std::string tag = res.get_value(i, 2);
-				ret[img_id]["subs"][sub_i]->ary.push_back(tag);
+				ret[img_id]["subs"][sub_i]["tags"]->ary.push_back(tag);
 			}
 			
 			return response_query->set_body(ret.serialize(), "application/json");
 		}
 	}
 };
+
+// ================================================================================================================================
+// --------------------------------------------------------------------------------------------------------------------------------
+// ================================================================================================================================
+
+struct dogibooru_api_tagweights : public basic_route {
+	void respond() {
+		postgres_conview pq = pqp->acquire();
+		
+		json post;
+		try {
+			post = json::parse({body.begin(), body.end()});
+		} catch (blueshift::general_exception const & ex) {
+			return generic_error(http::status_code::bad_request);
+		}
+		if (!post.is_map()) return generic_error(http::status_code::bad_request);
+		
+		json & get = post["get"];
+		json & set = post["set"];
+		if (set && !get_cookie_act(pq, request->cookie("act"))) return generic_error(http::status_code::forbidden, "editing requires admin authentication"); 
+		if (!set && !get) return generic_error(http::status_code::bad_request);
+		if (get && !get.is_ary()) return generic_error(http::status_code::bad_request);
+		if (set && !set.is_map()) return generic_error(http::status_code::bad_request);
+		
+		postgres_result res;
+		
+		if (set) {
+			for (auto const & tag : set->map) {
+				std::string name = tag.first;
+				std::string weight = tag.second;
+				pqcmd("UPDATE booru.tag SET weight = %s WHERE name = '%s'", weight.c_str(), name.c_str());
+			}
+		}
+		
+		if (get) {
+			json ret = json::map();
+			if (!get->ary.size()) {
+				pqtup(res, "SELECT name, weight FROM booru.tag ORDER BY name ASC");
+				for (int i = 0; i < res.num_rows(); i++) {
+					ret[res.get_value(i, 0)] = json::nuf(res.get_value(i, 1));
+				}
+			} else {
+				std::string in_clause {};
+				for (size_t i = 0; i < get->ary.size(); i++) {
+					if (i != 0) in_clause += ",";
+					in_clause += get[i].to_string();
+				}
+				pqtup(res, "SELECT name, weight FROM booru.tag WHERE name IN ('%s') ORDER BY name ASC", in_clause.c_str());
+				for (int i = 0; i < res.num_rows(); i++) {
+					ret[res.get_value(i, 0)] = json::nuf(res.get_value(i, 1));
+				}
+			}
+			return response_query->set_body(ret.serialize(), "application/json");
+		}
+	}
+};
+
 
 // ================================================================================================================================
 // --------------------------------------------------------------------------------------------------------------------------------
@@ -273,12 +327,112 @@ struct dogibooru_api_filter : public basic_route {
 		}
 		
 		postgres_result res;
-		pqtup(res, "SELECT img_id FROM booru.filter_imgs_by_tags_txt('%s','%s')", filt_in_clause.c_str(), omit_in_clause.c_str());
+		pqtup(res, "SELECT DISTINCT img_id FROM booru.filter_imgs_by_tags_txt('%s','%s') ORDER BY img_id DESC", filt_in_clause.c_str(), omit_in_clause.c_str());
 		
 		json ret = json::ary();
 		for (int i = 0; i < res.num_rows(); i++) {
 			ret[i] = res.get_value(i, 0);
 		}
+		return response_query->set_body(ret.serialize(), "application/json");
+	}
+};
+
+// ================================================================================================================================
+// --------------------------------------------------------------------------------------------------------------------------------
+// ================================================================================================================================
+
+struct dogibooru_api_similar_loose : public basic_route {
+	void respond() {
+		postgres_conview pq = pqp->acquire();
+		
+		json post, ret = json::map();
+		try {
+			post = json::parse({body.begin(), body.end()});
+		} catch (blueshift::general_exception const & ex) {
+			return generic_error(http::status_code::bad_request, ex.what());
+		}
+		if (!post.is_ary()) return generic_error(http::status_code::bad_request);
+		
+		std::string in_clause;
+		for (size_t i = 0; i < post->ary.size(); i++) {
+			if (i != 0) in_clause += ",";
+			in_clause += strf("'%s'", post[i].to_string().c_str());
+		}
+		
+		postgres_result res;
+		pqtup(res, R"(
+			WITH sub_weights AS (
+				SELECT sub_id, weight FROM booru.weight_subs_by_tags_loose (
+					ARRAY (
+						SELECT booru.tag.id FROM booru.tag WHERE booru.tag.name IN (%s)
+					)
+				)
+			)
+			SELECT booru.sub.img_id, MAX(sub_weights.weight)
+			FROM booru.sub
+			INNER JOIN sub_weights
+			ON sub_weights.sub_id = booru.sub.id
+			WHERE booru.sub.id = sub_weights.sub_id
+			GROUP BY booru.sub.img_id, sub_weights.weight
+			ORDER BY sub_weights.weight DESC, img_id DESC
+		)", in_clause.c_str());
+		
+		json & ids = ret["ids"] = json::ary();
+		json & weights = ret["weights"] = json::ary();
+		
+		for (int i = 0; i < res.num_rows(); i++) {
+			ids->ary.push_back(res.get_value(i, 0));
+			weights->ary.push_back(res.get_value(i, 1));
+		}
+		
+		return response_query->set_body(ret.serialize(), "application/json");
+	}
+};
+
+struct dogibooru_api_similar_strict : public basic_route {
+	void respond() {
+		postgres_conview pq = pqp->acquire();
+		
+		json post, ret = json::map();
+		try {
+			post = json::parse({body.begin(), body.end()});
+		} catch (blueshift::general_exception const & ex) {
+			return generic_error(http::status_code::bad_request, ex.what());
+		}
+		if (!post.is_ary()) return generic_error(http::status_code::bad_request);
+		
+		std::string in_clause;
+		for (size_t i = 0; i < post->ary.size(); i++) {
+			if (i != 0) in_clause += ",";
+			in_clause += strf("'%s'", post[i].to_string().c_str());
+		}
+		
+		postgres_result res;
+		pqtup(res, R"(
+			WITH sub_weights AS (
+				SELECT sub_id, weight FROM booru.weight_subs_by_tags_strict (
+					ARRAY (
+						SELECT booru.tag.id FROM booru.tag WHERE booru.tag.name IN (%s)
+					)
+				)
+			)
+			SELECT booru.sub.img_id, MAX(sub_weights.weight)
+			FROM booru.sub
+			INNER JOIN sub_weights
+			ON sub_weights.sub_id = booru.sub.id
+			WHERE booru.sub.id = sub_weights.sub_id
+			GROUP BY booru.sub.img_id, sub_weights.weight
+			ORDER BY sub_weights.weight DESC, img_id DESC
+		)", in_clause.c_str());
+		
+		json & ids = ret["ids"] = json::ary();
+		json & weights = ret["weights"] = json::ary();
+		
+		for (int i = 0; i < res.num_rows(); i++) {
+			ids->ary.push_back(res.get_value(i, 0));
+			weights->ary.push_back(res.get_value(i, 1));
+		}
+		
 		return response_query->set_body(ret.serialize(), "application/json");
 	}
 };
@@ -543,6 +697,80 @@ struct dogibooru_api_impls : public basic_route {
 // --------------------------------------------------------------------------------------------------------------------------------
 // ================================================================================================================================
 
+struct dogibooru_api_auth : public basic_route {
+	void respond() {
+		postgres_conview pq = pqp->acquire();
+		postgres_result res;
+		
+		json post, ret = json::map();
+		
+		try {
+			post = json::parse({body.begin(), body.end()});
+		} catch (blueshift::general_exception const & ex) {
+			return generic_error(http::status_code::bad_request, ex.what());
+		}
+		if (!post.is_map()) return generic_error(http::status_code::bad_request);
+		
+		std::string username = post["username"];
+		std::string password = post["password"];
+		if (!username.size() || !password.size()) return generic_error(http::status_code::bad_request);
+		pqtup(res, "SELECT id, passhash, salt FROM booru.admin WHERE username = '%s'", username.c_str());
+		if (!res.num_rows()) {
+			ret["status"] = json::nui(0);
+			ret["info"] = "incorrect username";
+			return response_query->set_body(ret.serialize(), "application/json");
+		}
+		std::string uid = res.get_value(0, 0);
+		std::string passtest = crypto::hash_skein(res.get_value(0, 2) + password).hex();
+		if (passtest != res.get_value(0, 1)) {
+			ret["status"] = json::nui(0);
+			ret["info"] = "incorrect password";
+			return response_query->set_body(ret.serialize(), "application/json");
+		}
+		std::string cookie_str = crypto::random(32).hex();
+		pqcmd("INSERT INTO booru.cookie (cookie, user_id, expires) VALUES ('%s', %s, %s)", cookie_str.c_str(), uid.c_str(), "NOW() + interval'86400 seconds'");
+		http::cookie cook {"act", cookie_str};
+		cook.max_age = 86400;
+		cook.secure = true;
+		cook.httponly = true;
+		cook.domain = "dogi.us";
+		cook.path = "/";
+		response->cookies.insert(cook);
+		
+		ret["status"] = json::nui(1);
+		ret["info"] = "";
+		
+		return response_query->set_body(ret.serialize(), "application/json");
+	}
+};
+
+struct dogibooru_api_cmd : public basic_route {
+	void respond() {
+		postgres_conview pq = pqp->acquire();
+		postgres_result res;
+		
+		json post, ret;
+		
+		try {
+			post = json::parse({body.begin(), body.end()});
+		} catch (blueshift::general_exception const & ex) {
+			return generic_error(http::status_code::bad_request, ex.what());
+		}
+		if (!post.is_str()) return generic_error(http::status_code::bad_request);
+		
+		std::string cmd = post.to_string();
+		
+		ret["status"] = json::nui(0);
+		ret["info"] = "unknown command";
+		
+		return response_query->set_body(ret.serialize(), "application/json");
+	}
+};
+
+// ================================================================================================================================
+// --------------------------------------------------------------------------------------------------------------------------------
+// ================================================================================================================================
+
 struct dogibooru_admin_login : public basic_route {
 	void respond() {
 		postgres_conview pq = pqp->acquire();
@@ -592,19 +820,55 @@ struct dogibooru_image_upload : public basic_route {
 		QImage img;
 		if (!img.loadFromData((unsigned char const *)file->body.data(), file->body.size())) return generic_error(http::status_code::bad_request, "Uploaded image could not be parsed as an image.");
 		std::filesystem::path imgname {file->header.filename};
-		std::string ext = imgname.extension().generic_u8string();
-		ext = ext.substr(1);
+		std::string ext = imgname.extension().generic_u8string().substr(1);
+		std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 		std::string name = crypto::random(16).hexlow();
 		std::string origstem = imgname.stem().generic_u8string();
 		std::string quer = strf("INSERT INTO booru.img (name, ext, origname, width, height, size) VALUES ('%s', '%s', '%s', %u, %u, %zu) RETURNING id", name.c_str(), ext.c_str(), origstem.c_str(), img.width(), img.height(), file->body.size());
 		postgres_result insres = pq.exec(quer.c_str());
 		if (!insres.tuples_ok()) isemsg("Could not insert image into database: %s", quer.c_str());
 		int img_id = strtoul(insres.get_value(0, 0).c_str(), nullptr, 10);
-		create_thumbnail(pq, img, 200, img_id);
 		std::ofstream si {images_root + name + "." + ext, std::ios::binary};
 		si.write(file->body.data(), file->body.size());
 		response->code = http::status_code::see_other;
 		response->fields["Location"] = "/edit#" + std::to_string(img_id);
+	}
+};
+
+// ================================================================================================================================
+// --------------------------------------------------------------------------------------------------------------------------------
+// ================================================================================================================================
+
+struct dogibooru_thumbs_generator : public basic_route {
+	void respond() {
+		if (serve_file(thumbs_root, false, false)) return;
+		if (!path.size()) return generic_error(http::status_code::bad_request, "path is empty");
+		std::string id {};
+		unsigned long sqsize = 0;
+		std::string ext {};
+		{
+			auto s1 = strops::separate(path, std::string{"_"}, 1);
+			if (s1.size() != 2) return generic_error(http::status_code::bad_request, "missing underscore separating id and sqsize");
+			id = std::to_string( strtoul(s1[0].c_str(), nullptr, 10) );
+			auto s2 = strops::separate(s1[1], std::string{"."}, 1);
+			if (s2.size() != 2) return generic_error(http::status_code::bad_request, "missing extension");
+			sqsize = strtoul(s2[0].c_str(), nullptr, 10);
+			ext = s2[1];
+			if (ext != "png" && ext != "jpg") return generic_error(http::status_code::bad_request, "extension not jpg or png");
+		}
+		postgres_conview pq = pqp->acquire();
+		postgres_result res;
+		pqtup(res, "SELECT name, ext FROM booru.img WHERE id = %s", id.c_str());
+		if (res.num_rows() < 1) return generic_error(http::status_code::not_found, "id not found");
+		std::string imgpath = images_root + res.get_value(0, 0) + "." + res.get_value(0, 1);
+		QImage src { QString::fromStdString(imgpath) };
+		QImage rs = src.scaled(sqsize, sqsize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+		if (ext == "png") {
+			rs.save(QString::fromStdString(thumbs_root + path), "PNG");
+		} else {
+			rs.save(QString::fromStdString(thumbs_root + path), "JPG", 90);
+		}
+		if (!serve_file(thumbs_root, false, false)) srcthrow("could not find image file after saving it!? WHAT");
 	}
 };
 
@@ -673,7 +937,8 @@ BLUESHIFT_MODULE_INIT_FUNC {
 			id BIGSERIAL PRIMARY KEY,
 			name VARCHAR(32) NOT NULL UNIQUE,
 			grp_id BIGINT REFERENCES booru.grp ON DELETE SET NULL ON UPDATE CASCADE,
-			description TEXT
+			description TEXT,
+			weight FLOAT8 NOT NULL DEFAULT 1.0
 		)
 	)");
 	// SUBJECTS
@@ -717,14 +982,6 @@ BLUESHIFT_MODULE_INIT_FUNC {
 		)
 	)");
 	pqinitcmd(pq, R"(
-		CREATE TABLE IF NOT EXISTS booru.thumb (
-			img_id BIGINT NOT NULL REFERENCES booru.img ON DELETE CASCADE ON UPDATE CASCADE,
-			sqsize SMALLINT NOT NULL,
-			ext VARCHAR(4) NOT NULL,
-			PRIMARY KEY ( img_id, sqsize ) 
-		)
-	)");
-	pqinitcmd(pq, R"(
 		CREATE TABLE IF NOT EXISTS booru.impl (
 			tag_id BIGINT NOT NULL REFERENCES booru.tag ON DELETE CASCADE ON UPDATE CASCADE,
 			implies_id BIGINT NOT NULL REFERENCES booru.tag ON DELETE CASCADE ON UPDATE CASCADE,
@@ -755,12 +1012,6 @@ BLUESHIFT_MODULE_INIT_FUNC {
 	)");
 	pqinitcmd(pq, R"(
 		CREATE INDEX IF NOT EXISTS cookie_expires_idx ON booru.cookie (expires)
-	)");
-	pqinitcmd(pq, R"(
-		CREATE INDEX IF NOT EXISTS thumb_img_id_idx ON booru.thumb (img_id)
-	)");
-	pqinitcmd(pq, R"(
-		CREATE INDEX IF NOT EXISTS thumb_sqsize_idx ON booru.thumb (sqsize)
 	)");
 	
 	// ================================================================
@@ -863,6 +1114,39 @@ BLUESHIFT_MODULE_INIT_FUNC {
 	)");
 	
 	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.get_tags_for_sub(sub_id BIGINT) RETURNS TABLE (tag_id BIGINT) AS $$
+		BEGIN
+			RETURN QUERY
+			SELECT booru.sub_tag.tag_id
+			FROM booru.sub_tag
+			WHERE booru.sub_tag.sub_id = 321
+			UNION
+			SELECT booru.img_tag.tag_id
+			FROM booru.img_tag
+			INNER JOIN booru.sub
+			ON booru.sub.id = 321 AND booru.img_tag.img_id = booru.sub.img_id
+			ORDER BY tag_id ASC;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.get_tags_for_subs() RETURNS TABLE (sub_id BIGINT, tag_id BIGINT) AS $$
+		BEGIN
+			RETURN QUERY
+			SELECT booru.sub_tag.sub_id, booru.sub_tag.tag_id
+			FROM booru.sub_tag
+			UNION
+			SELECT booru.sub.id AS sub_id, booru.img_tag.tag_id
+			FROM booru.img_tag
+			INNER JOIN booru.sub
+			ON booru.img_tag.img_id = booru.sub.img_id
+			ORDER BY sub_id ASC, tag_id ASC;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
+	pqinitcmd(pq, R"(
 		CREATE OR REPLACE FUNCTION booru.filter_imgs_by_tags(filter_ary VARCHAR(32)[], omit_ary VARCHAR(32)[]) RETURNS TABLE (img_id BIGINT, sub_id BIGINT) AS $$
 		BEGIN
 			RETURN QUERY
@@ -899,8 +1183,7 @@ BLUESHIFT_MODULE_INIT_FUNC {
 			WHERE (filtermatches.img_id, filtermatches.sub_id) NOT IN (
 				SELECT omitmatches.img_id, omitmatches.sub_id 
 				FROM omitmatches
-			)
-			ORDER BY filtermatches.img_id DESC;
+			);
 		END;
 		$$ LANGUAGE plpgsql;
 	)");
@@ -999,6 +1282,72 @@ BLUESHIFT_MODULE_INIT_FUNC {
 		$$ LANGUAGE plpgsql;
 	)");
 	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.weight_subs_by_tags_loose(tag_ids BIGINT[]) RETURNS TABLE (sub_id BIGINT, weight FLOAT8) AS $$
+		BEGIN
+			RETURN QUERY
+			WITH sub_tags AS (
+				SELECT *
+				FROM booru.get_tags_for_subs()
+			), sub_tags_w AS (
+				SELECT sub_tags.sub_id, sub_tags.tag_id, booru.tag.weight
+				FROM sub_tags
+				INNER JOIN booru.tag
+				ON booru.tag.id = sub_tags.tag_id
+			), tag_points AS (
+				SELECT sub_tags_w.sub_id, sub_tags_w.weight
+				FROM sub_tags_w
+				INNER JOIN booru.tag
+				ON booru.tag.id = sub_tags_w.tag_id
+				WHERE sub_tags_w.tag_id = ANY(tag_ids)
+				UNION ALL
+				SELECT booru.sub.id AS sub_id, 0 AS weight
+				FROM booru.sub
+			)
+			SELECT tag_points.sub_id, SUM(tag_points.weight)
+			FROM tag_points
+			GROUP BY tag_points.sub_id
+			ORDER BY SUM(tag_points.weight) DESC;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
+	pqinitcmd(pq, R"(
+		CREATE OR REPLACE FUNCTION booru.weight_subs_by_tags_strict(tag_ids BIGINT[]) RETURNS TABLE (sub_id BIGINT, weight FLOAT8) AS $$
+		BEGIN
+			RETURN QUERY
+			WITH sub_tags AS (
+				SELECT *
+				FROM booru.get_tags_for_subs()
+			), sub_tags_w AS (
+				SELECT sub_tags.sub_id, sub_tags.tag_id, booru.tag.weight
+				FROM sub_tags
+				INNER JOIN booru.tag
+				ON booru.tag.id = sub_tags.tag_id
+			), tag_points AS (
+				SELECT sub_tags_w.sub_id, booru.tag.weight
+				FROM sub_tags_w
+				INNER JOIN booru.tag
+				ON booru.tag.id = sub_tags_w.tag_id
+				WHERE sub_tags_w.tag_id = ANY(tag_ids)
+				UNION ALL
+				SELECT booru.sub.id AS sub_id, 0 AS weight
+				FROM booru.sub
+				UNION ALL
+				SELECT sub_tags_w.sub_id, booru.tag.weight * (-1) AS weight
+				FROM sub_tags_w
+				INNER JOIN booru.tag
+				ON booru.tag.id = sub_tags_w.tag_id
+				WHERE NOT sub_tags_w.tag_id = ANY(tag_ids)
+			)
+			SELECT tag_points.sub_id, SUM(tag_points.weight)
+			FROM tag_points
+			GROUP BY tag_points.sub_id
+			ORDER BY SUM(tag_points.weight) DESC;
+		END;
+		$$ LANGUAGE plpgsql;
+	)");
+	
 	// ================================================================
 	
 	std::filesystem::create_directory( std::filesystem::path {static_root} );
@@ -1012,13 +1361,19 @@ BLUESHIFT_MODULE_INIT_FUNC {
 	api->route_exact<dogibooru_api_tgroups>("tgroups", {"POST"});
 	api->route_exact<dogibooru_api_tagsrel>("tagsrel", {"POST"});
 	api->route_exact<dogibooru_api_impls>("impls", {"POST"});
+	api->route_exact<dogibooru_api_similar_loose>("lsim", {"POST"});
+	api->route_exact<dogibooru_api_similar_strict>("ssim", {"POST"});
+	api->route_exact<dogibooru_api_tagweights>("weights", {"POST"});
+	
+	api->route_exact<dogibooru_api_auth>("auth", {"POST"});
+	api->route_exact<dogibooru_api_cmd>("cmd", {"POST"});
 	
 	rt->route_exact<dogibooru_admin_login>("dologin", {"POST"});
 	rt->route_exact<dogibooru_image_upload>("doupload", {"POST"});
 	
 	rt->route_serve("/", static_root);
 	rt->route_serve("/i/", images_root);
-	rt->route_serve("/t/", thumbs_root);
+	rt->route_root<dogibooru_thumbs_generator>("/t/", {"GET"});
 	
 	imp->start_server(2080, rt);
 }
