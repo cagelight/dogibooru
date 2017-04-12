@@ -33,7 +33,7 @@ function setup_page() {
         let wcont = document.createElement('div')
         wcont.className = 'tweight_entry'
         // ========
-        wcont.appendChild(DOGI.WrapSpan(tag.name, tag.group ? 'tgrp_grp_' + tag.group + ' tweight_tagtext' : 'tgrp_grp_Homeless tweight_tagtext'))
+        wcont.appendChild(BOORU.StylizeByTagGroup(DOGI.WrapSpan(tag.name, 'tweight_tagtext'), tag.group))
         // ========
         let winp = document.createElement('input')
         winp.type = 'text'

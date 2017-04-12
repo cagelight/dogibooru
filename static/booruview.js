@@ -48,13 +48,13 @@ function setup_page() {
       if (data.groups) for (let grp in data.groups) {
         data.groups[grp].forEach((tag)=>{
           if (tagsv[tag]) tagsv[tag].forEach((tagi)=>{
-            tagi.className = 'tgrp_grp_' + grp + ' ' + tagi.className
+						BOORU.StylizeByTagGroup(tagi, grp)
           })
         })
       }
       if (data.groupless) data.groupless.forEach((tag)=>{
 				if (tagsv[tag]) tagsv[tag].forEach((tagi)=>{
-					tagi.className = 'tgrp_grp_Homeless ' + tagi.className
+					BOORU.StylizeByTagGroup(tagi, null)
 				})
       })
     })

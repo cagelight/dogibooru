@@ -7,7 +7,7 @@ function create_tag_area(grpname, tagarry) {
   grphead.className = 'tgrp_grphead'
   let grptxt = document.createElement('span')
   grptxt.appendChild(document.createTextNode(grpname))
-  grptxt.className = "tgrp_grpheadtxt " + "tgrp_grp_" + grpname
+  BOORU.StylizeByTagGroup(grphead, grpname)
   grphead.appendChild(grptxt)
   tag_area.appendChild(grphead)
 
@@ -16,7 +16,7 @@ function create_tag_area(grpname, tagarry) {
   tagarry.forEach((tag)=>{
     let tagtxt = document.createElement('a')
     tagtxt.href = '/#' + tag
-    tagtxt.className = "tgrp_grptagtxt " + "tgrp_grp_" + grpname
+    BOORU.StylizeByTagGroup(tagtxt, grpname)
     tagtxt.appendChild(document.createTextNode(tag))
     grptagarea.appendChild(tagtxt)
     grptagarea.appendChild(document.createTextNode(' '))
@@ -40,7 +40,7 @@ function setup_tag_area(data) {
     })
   }
   if (data.groupless) {
-    create_tag_area("Homeless", data.groupless)
+    create_tag_area("homeless", data.groupless)
   }
 }
 

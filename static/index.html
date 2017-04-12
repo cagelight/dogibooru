@@ -7,6 +7,10 @@
 	<link rel="stylesheet" type="text/css" href="/dogibooru.css">
 </head>
 <body>
+	<div id="index_slideshow_cont" tabindex="1" onkeydown="handle_ss_key(event)">
+		<img id="index_slideshow_img_front" class="index_slideshow_img">
+		<img id="index_slideshow_img_back" class="index_slideshow_img">
+	</div>
 	<div id="index_prime">
 		<div id="index_head">
 			<span class="index_headcat">TAGS:</span>
@@ -14,6 +18,8 @@
 			<span class="index_headcat">OMIT:</span>
 			<input type="text" id="index_omitinput" onkeyup="handle_tag_input(event)"></input>
 			<input type="button" id="index_tagclear" value="C" onclick="handle_tag_clear(event)"></input>
+			<select id="index_modeselect"></select>
+			<input type="button" id="index_ssb" value="S" onclick="handle_ssb(event)"></input>
 		</div>
 		<div id="index_sub">
 			<div id="index_leftbar_cont">
