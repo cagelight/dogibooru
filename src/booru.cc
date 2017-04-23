@@ -367,14 +367,13 @@ struct dogibooru_api_similar_loose : public basic_route {
 						SELECT booru.tag.id FROM booru.tag WHERE booru.tag.name IN (%s)
 					)
 				)
+			), culled_imgs AS (
+				SELECT DISTINCT ON (booru.sub.img_id) booru.sub.img_id, sub_weights.weight
+				FROM sub_weights 
+				INNER JOIN booru.sub 
+				ON booru.sub.id = sub_weights.sub_id
 			)
-			SELECT booru.sub.img_id, MAX(sub_weights.weight)
-			FROM booru.sub
-			INNER JOIN sub_weights
-			ON sub_weights.sub_id = booru.sub.id
-			WHERE booru.sub.id = sub_weights.sub_id
-			GROUP BY booru.sub.img_id, sub_weights.weight
-			ORDER BY sub_weights.weight DESC, img_id DESC
+			SELECT * FROM culled_imgs ORDER BY culled_imgs.weight DESC;
 		)", in_clause.c_str());
 		
 		json & ids = ret["ids"] = json::ary();
@@ -415,14 +414,13 @@ struct dogibooru_api_similar_strict : public basic_route {
 						SELECT booru.tag.id FROM booru.tag WHERE booru.tag.name IN (%s)
 					)
 				)
+			), culled_imgs AS (
+				SELECT DISTINCT ON (booru.sub.img_id) booru.sub.img_id, sub_weights.weight
+				FROM sub_weights 
+				INNER JOIN booru.sub 
+				ON booru.sub.id = sub_weights.sub_id
 			)
-			SELECT booru.sub.img_id, MAX(sub_weights.weight)
-			FROM booru.sub
-			INNER JOIN sub_weights
-			ON sub_weights.sub_id = booru.sub.id
-			WHERE booru.sub.id = sub_weights.sub_id
-			GROUP BY booru.sub.img_id, sub_weights.weight
-			ORDER BY sub_weights.weight DESC, img_id DESC
+			SELECT * FROM culled_imgs ORDER BY culled_imgs.weight DESC;
 		)", in_clause.c_str());
 		
 		json & ids = ret["ids"] = json::ary();
@@ -1306,8 +1304,7 @@ BLUESHIFT_MODULE_INIT_FUNC {
 			)
 			SELECT tag_points.sub_id, SUM(tag_points.weight)
 			FROM tag_points
-			GROUP BY tag_points.sub_id
-			ORDER BY SUM(tag_points.weight) DESC;
+			GROUP BY tag_points.sub_id;
 		END;
 		$$ LANGUAGE plpgsql;
 	)");
@@ -1342,8 +1339,7 @@ BLUESHIFT_MODULE_INIT_FUNC {
 			)
 			SELECT tag_points.sub_id, SUM(tag_points.weight)
 			FROM tag_points
-			GROUP BY tag_points.sub_id
-			ORDER BY SUM(tag_points.weight) DESC;
+			GROUP BY tag_points.sub_id;
 		END;
 		$$ LANGUAGE plpgsql;
 	)");
