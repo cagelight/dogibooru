@@ -5,9 +5,9 @@ function setup_page() {
 	view_edit_button.onclick = ()=>{window.location.href = "/edit#" + img}
 	let tags_view = document.getElementById("tags_view")
 	DOGI.ClearElement(tags_view)
-	DOGI.JSONPost("/api/tags/", {"get":[parseInt(img)]}, function(result) {
+	DOGI.JSONPost("/api/tags/", {"get":parseInt(img)}, function(result) {
 		let tagsv = {}
-		if (result[img].itags) result[img].itags.forEach(function(tag){
+		if (result.itags) result.itags.forEach(function(tag){
 			let link = document.createElement('a')
 			link.href = '/#' + tag
 			link.className = 'tags_link'
@@ -16,10 +16,11 @@ function setup_page() {
 			if (!tagsv[tag]) tagsv[tag] = []
 			tagsv[tag].push(link)
 		});
-		if (result[img].subs) result[img].subs.forEach((sub)=>{
+		if (result.subs) result.subs.forEach((sub)=>{
 			let sep = document.createElement('div')
 			sep.className = 'tags_separator'
 			tags_view.appendChild(sep)
+			if (sub.desc) tags_view.appendChild(DOGI.WrapSpan(sub.desc, 'view_sub_pos_desc'))
 			sub.tags.forEach((tag)=>{
 				let link = document.createElement('a')
 				link.href = '/#' + tag
@@ -31,7 +32,7 @@ function setup_page() {
 			})
 
 			let combined_tags = sub.tags
-			if (result[img].itags) combined_tags = combined_tags.concat(result[img].itags)
+			if (result.itags) combined_tags = combined_tags.concat(result.itags)
 
 			let lsim_but = document.createElement('a')
 			lsim_but.innerHTML = 'LSIM'
@@ -45,19 +46,19 @@ function setup_page() {
 			sep.appendChild(ssim_but)
 		})
 		DOGI.JSONPost("/api/tgroups", {'get':{"all":1}}, (data)=>{
-      if (data.groups) for (let grp in data.groups) {
-        data.groups[grp].forEach((tag)=>{
-          if (tagsv[tag]) tagsv[tag].forEach((tagi)=>{
+			if (data.groups) for (let grp in data.groups) {
+				data.groups[grp].forEach((tag)=>{
+					if (tagsv[tag]) tagsv[tag].forEach((tagi)=>{
 						BOORU.StylizeByTagGroup(tagi, grp)
-          })
-        })
-      }
-      if (data.groupless) data.groupless.forEach((tag)=>{
+					})
+				})
+			}
+			if (data.groupless) data.groupless.forEach((tag)=>{
 				if (tagsv[tag]) tagsv[tag].forEach((tagi)=>{
 					BOORU.StylizeByTagGroup(tagi, null)
 				})
-      })
-    })
+			})
+		})
 	});
 	DOGI.JSONPost("/api/img/", [parseInt(img)], function(result) {
 		let image_view = document.getElementById("image_view")
@@ -77,7 +78,6 @@ function setup_page() {
 				image.style.maxHeight = "100%"
 			}
 		}
-
 		image_view.appendChild(image)
 	});
 }

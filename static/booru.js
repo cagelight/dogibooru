@@ -13,9 +13,19 @@ class BOORU {
       "clothing": {
         "color": "#888"
       },
+      "clothing_items": {
+        "color": "#888"
+      },
+      "clothing_location": {
+        "color": "#888"
+      },
       "cum": {
         "color": "#AAA",
         "text-shadow": "0px 0px 5px",
+      },
+      "damage": {
+        "color": "#C00",
+        "text-shadow": "0px 0px 5px #A00",
       },
       "demeanor": {
         "color": "#06F",
@@ -28,10 +38,6 @@ class BOORU {
       },
       "genital": {
         "color": "#F0C"
-      },
-      "gore": {
-        "color": "#C00",
-        "text-shadow": "0px 0px 5px #A00",
       },
       "influence": {
         "color": "#0AF",

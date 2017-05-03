@@ -412,7 +412,6 @@ input {
 	height: 20px;
 	background-color: #080808;
 	margin-top: 5px;
-	margin-bottom: 5px;
 	border-radius: 3px;
 	justify-content: center;
 	align-items: center;
@@ -437,6 +436,14 @@ input {
 
 .view_ssim_button:hover {
 	color: #FFF;
+}
+
+.view_sub_pos_desc {
+	background-color: #111;
+	text-align: center;
+	margin-bottom: 5px;
+	font-size: 80%;
+	padding: 2px;
 }
 
 /* EDIT */
@@ -499,9 +506,10 @@ input {
 	align-items: center;
 }
 
-.tedit_sub_idspan {
+.tedit_sub_descedit {
 	flex: 1 0 auto;
 	font-size: 80%;
+	text-align: center;
 }
 
 .tedit_sub_del_button {

@@ -143,40 +143,44 @@ struct dogibooru_api_tags : public basic_route {
 		json & set = post["set"];
 		if (set && !get_cookie_act(pq, request->cookie("act"))) return generic_error(http::status_code::forbidden, "editing requires admin authentication"); 
 		if (!set && !get) return generic_error(http::status_code::bad_request);
-		if (get && !get.is_ary()) return generic_error(http::status_code::bad_request);
-		if (set && !set.is_ary()) return generic_error(http::status_code::bad_request);
+		if (get && !get.is_nui()) return generic_error(http::status_code::bad_request);
+		if (set && !set.is_map()) return generic_error(http::status_code::bad_request);
 		
 		if (set) {
-			pq.begin();
-			for (json & v : set->ary) {
-				if (!v.is_map()) return generic_error(http::status_code::bad_request);
-				std::string img_id = v["id"];
-				sql_sanitize(img_id);
-				pqcmd("DELETE FROM booru.img_tag WHERE img_id = %s", img_id.c_str());
-				pqcmd("DELETE FROM booru.sub WHERE img_id = %s", img_id.c_str());
-				json & itags = v["itags"];
-				if (itags.is_ary()) {
-					for (std::string tag : itags->ary) {
+		pq.begin();
+			if (!set.is_map()) return generic_error(http::status_code::bad_request);
+			std::string img_id = set["id"];
+			sql_sanitize(img_id);
+			pqcmd("DELETE FROM booru.img_tag WHERE img_id = %s", img_id.c_str());
+			pqcmd("DELETE FROM booru.sub WHERE img_id = %s", img_id.c_str());
+			json & itags = set["itags"];
+			if (itags.is_ary()) {
+				for (std::string tag : itags->ary) {
+					if (!tag.size()) continue;
+					sql_sanitize(tag);
+					postgres_result res;
+					pqtup(res, "SELECT booru.add_tag_to_img(%s, '%s')", img_id.c_str(), tag.c_str());
+				}
+			}
+			json & subs = set["subs"];
+			if (subs) {
+				if (!subs.is_ary()) return generic_error(http::status_code::bad_request);
+				for (json & sub : subs->ary) {
+					json & tags = sub["tags"];
+					std::string pos_desc = sub["desc"];
+					if (!tags.is_ary()) return generic_error(http::status_code::bad_request);
+					postgres_result res;
+					if (pos_desc.length()) {
+						pqtup(res, "INSERT INTO booru.sub (img_id, pos_desc) VALUES (%s, '%s') RETURNING id", img_id.c_str(), pos_desc.c_str());
+					} else {
+						pqtup(res, "INSERT INTO booru.sub (img_id) VALUES (%s) RETURNING id", img_id.c_str());
+					}
+					std::string sub_id = res.get_value(0, 0);
+					for (std::string tag : tags->ary) {
 						if (!tag.size()) continue;
 						sql_sanitize(tag);
 						postgres_result res;
-						pqtup(res, "SELECT booru.add_tag_to_img(%s, '%s')", img_id.c_str(), tag.c_str());
-					}
-				}
-				json & subs = v["subs"];
-				if (subs) {
-					if (!subs.is_ary()) return generic_error(http::status_code::bad_request);
-					for (json & tags : subs->ary) {
-						if (!tags.is_ary()) return generic_error(http::status_code::bad_request);
-						postgres_result res;
-						pqtup(res, "INSERT INTO booru.sub (img_id) VALUES (%s) RETURNING id", img_id.c_str());
-						std::string sub_id = res.get_value(0, 0);
-						for (std::string tag : tags->ary) {
-							if (!tag.size()) continue;
-							sql_sanitize(tag);
-							postgres_result res;
-							pqtup(res, "SELECT booru.add_tag_to_sub(%s, '%s')", sub_id.c_str(), tag.c_str());
-						}
+						pqtup(res, "SELECT booru.add_tag_to_sub(%s, '%s')", sub_id.c_str(), tag.c_str());
 					}
 				}
 			}
@@ -184,46 +188,29 @@ struct dogibooru_api_tags : public basic_route {
 		}
 		
 		if (get) {
-			std::string in_clause {};
-			for (size_t i = 0; i < get->ary.size(); i++) {
-				json const & j = get[i];
-				if (i != 0) in_clause += ",";
-				in_clause += (std::string) j;
-			}
 			
+			std::string img_id = std::to_string(get.to_int());
 			json ret = json::map();
-			postgres_result res;
+			postgres_result res, res2;
 			
-			pqtup(res, "SELECT * FROM booru.get_imgs_tags('%s')", in_clause.c_str());
+			pqtup(res, "SELECT booru.tag.name FROM booru.img_tag INNER JOIN booru.tag ON booru.tag.id = booru.img_tag.tag_id WHERE booru.img_tag.img_id = %s ORDER BY booru.tag.name ASC", img_id.c_str());
 			for (int i = 0; i < res.num_rows(); i++) {
-				std::string img_id = res.get_value(i, 0);
-				json & cur = ret[img_id]["itags"];
+				json & cur = ret["itags"];
 				if (!cur) cur = json::ary();
-				cur->ary.push_back(res.get_value(i, 1));
+				cur->ary.push_back(res.get_value(i, 0));
 			}
 			
-			pqtup(res, "SELECT * FROM booru.get_imgs_subs_tags('%s')", in_clause.c_str());
-			std::string last_img {};
-			std::string last_sub {};
-			int sub_i = 0;
+			ret["subs"] = json::ary();
+			pqtup(res, "SELECT booru.sub.id, booru.sub.pos_desc FROM booru.sub WHERE booru.sub.img_id = %s", img_id.c_str());
 			for (int i = 0; i < res.num_rows(); i++) {
-				std::string img_id = res.get_value(i, 0);
-				std::string sub_id = res.get_value(i, 1);
-				if (!i || img_id != last_img) { 
-					sub_i = 0;
-					json & sub_cur = ret[img_id]["subs"][sub_i] = json::map();
-					sub_cur["id"] = sub_id;
-					sub_cur["tags"] = json::ary();
-					last_img = img_id; 
-					last_sub = sub_id;
-				} else if (sub_id != last_sub) {
-					json & sub_cur = ret[img_id]["subs"][++sub_i] = json::map();
-					sub_cur["id"] = sub_id;
-					sub_cur["tags"] = json::ary();
-					last_sub = sub_id;
+				json & sub = ret["subs"][i];
+				sub["id"] = res.get_value(i, 0);
+				sub["desc"] = res.get_value(i, 1);
+				json & tags = sub["tags"] = json::ary();
+				pqtup(res2, "SELECT booru.tag.name FROM booru.sub_tag INNER JOIN booru.tag ON booru.tag.id = booru.sub_tag.tag_id WHERE booru.sub_tag.sub_id = %s ORDER BY booru.tag.name ASC", res.get_value(i, 0).c_str());
+				for (int j = 0; j < res2.num_rows(); j++) {
+					tags->ary.push_back(res2.get_value(j, 0));
 				}
-				std::string tag = res.get_value(i, 2);
-				ret[img_id]["subs"][sub_i]["tags"]->ary.push_back(tag);
 			}
 			
 			return response_query->set_body(ret.serialize(), "application/json");
@@ -943,7 +930,8 @@ BLUESHIFT_MODULE_INIT_FUNC {
 	pqinitcmd(pq, R"(
 		CREATE TABLE IF NOT EXISTS booru.sub (
 			id BIGSERIAL PRIMARY KEY,
-			img_id BIGINT NOT NULL REFERENCES booru.img ON DELETE CASCADE ON UPDATE CASCADE
+			img_id BIGINT NOT NULL REFERENCES booru.img ON DELETE CASCADE ON UPDATE CASCADE,
+			pos_desc VARCHAR(64)
 		)
 	)");
 	// IMAGE TAGS
@@ -1371,7 +1359,7 @@ BLUESHIFT_MODULE_INIT_FUNC {
 	rt->route_serve("/i/", images_root);
 	rt->route_root<dogibooru_thumbs_generator>("/t/", {"GET"});
 	
-	imp->start_server(2080, rt);
+	imp->start_server_http(2080, rt);
 }
 
 BLUESHIFT_MODULE_TERM_FUNC {

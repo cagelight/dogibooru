@@ -8,11 +8,11 @@ var numsubs = 0;
 
 function setup_edit(get_obj) {
 	remallsubs()
-	if (get_obj[img].itags) tedit_iarea.value = get_obj[img].itags.join(' ')
+	if (get_obj.itags) tedit_iarea.value = get_obj.itags.join(' ')
 	else tedit_iarea.value = ""
-	if (get_obj[img].subs) get_obj[img].subs.forEach((sub)=>{
+	if (get_obj.subs) get_obj.subs.forEach((sub)=>{
 		let newsub = addsub()
-		newsub.subid.innerHTML = "SUBJECT ID: #" + sub.id
+		newsub.subdescedit.value = sub.desc
 		newsub.textarea.value = sub.tags.join(' ')
 	})
 }
@@ -21,8 +21,8 @@ function setup_page() {
 	remallsubs()
 	img = window.location.hash.substring(1)
 	document.title = 'Edit: #' + img
-	DOGI.JSONPost("/api/tags/", {"get":[parseInt(img)]}, function(result, ok) {
-		if (ok && img in result) {
+	DOGI.JSONPost("/api/tags/", {"get":parseInt(img)}, function(result, ok) {
+		if (ok) {
 			setup_edit(result)
 		} else {
 			tedit_iarea.value = ""
@@ -81,10 +81,12 @@ function addsub() {
 	new_subdivhead.className = 'tedit_sub_div_header'
 	new_subdiv.appendChild(new_subdivhead)
 	//================
-	let subidspan = document.createElement('span')
-	subidspan.className = 'tedit_sub_idspan'
-	subidspan.appendChild(document.createTextNode(''))
-	new_subdivhead.appendChild(subidspan)
+	let subdescedit = document.createElement('input')
+	subdescedit.type = 'text'
+	subdescedit.className = 'tedit_sub_descedit'
+	subdescedit.appendChild(document.createTextNode(''))
+	new_subdivhead.appendChild(subdescedit)
+	new_subdiv.subdescedit = subdescedit
 	//================
 	let subdelbutton = document.createElement('input')
 	subdelbutton.className = 'tedit_sub_del_button'
@@ -110,7 +112,7 @@ function addsub() {
 
 	let rdata = {}
 	rdata.textarea = new_sarea
-	rdata.subid = subidspan
+	rdata.subdescedit = subdescedit
 	return rdata
 }
 
@@ -129,18 +131,19 @@ function editsubmit() {
 	tedit_iarea.value.split(' ').forEach((s)=>{if(s)tags.push(s)})
 	//================
 	let obj = {}
-	obj["get"] = [parseInt(img)]
-	obj["set"] = []
-	obj["set"][0] = {}
-	obj["set"][0].id = img
-	obj["set"][0].itags = tags
+	obj["get"] = parseInt(img)
+	obj["set"] = {}
+	obj["set"].id = img
+	obj["set"].itags = tags
 	//================
 	let subs = []
 	DOGI.ChildIterate(tedit_sub_container, (child) => {
 		if (child.className == 'tedit_sub_div') {
-			let sub = []
+			let sub = {}
+			sub.tags = []
+			sub.desc = child.subdescedit.value
 			child.childNodes[1].value = child.childNodes[1].value.trim()
-			child.childNodes[1].value.split(' ').forEach((s)=>{if(s)sub.push(s)})
+			child.childNodes[1].value.split(' ').forEach((s)=>{if(s)sub.tags.push(s)})
 			subs.push(sub)
 		}
 	})
@@ -148,10 +151,10 @@ function editsubmit() {
 		DOGI.ErrorPopup("All images must have at least one subject")
 		return
 	}
-	obj["set"][0].subs = subs
+	obj["set"].subs = subs
 	//================
 	DOGI.JSONPost("/api/tags/", obj, function(result, ok) {
-		if (ok && img in result) {
+		if (ok) {
 			setup_edit(result)
 			tedit_submit.style.animation = '0.25s ease-in-out 0s infinite normal tedit_submit_succ'
 			setTimeout(()=>{tedit_submit.style.animation = null}, 250)
